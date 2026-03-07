@@ -3,14 +3,15 @@ name: Deploy MailForge
 on:
   push:
     branches:
-      - main         # auto-deploy on every push to main
-  workflow_dispatch: # allow manual trigger from GitHub UI
+      - main
+  workflow_dispatch:
 
 env:
   APP_DIR: /var/www/mailforge
   NGINX_WEBROOT: /var/www/mailforge/client
 
 jobs:
+
   # ────────────────────────────────────────────────────────────────
   # JOB 1 — Run backend tests
   # ────────────────────────────────────────────────────────────────
@@ -27,14 +28,14 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: backend/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            client/package-lock.json
 
       - name: Install backend deps
-        working-directory: backend
         run: npm ci
 
       - name: Run tests
-        working-directory: backend
         env:
           NODE_ENV: test
           PORT: 3000
@@ -43,7 +44,7 @@ jobs:
         run: |
           node src/index.js &
           SERVER_PID=$!
-          sleep 2
+          sleep 3
           ADMIN_KEY=admin_test_key node tests/test.js
           kill $SERVER_PID
 
@@ -64,7 +65,9 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: client/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            client/package-lock.json
 
       - name: Install frontend deps
         working-directory: client
@@ -73,8 +76,6 @@ jobs:
       - name: Build
         working-directory: client
         env:
-          # Vite bakes this into the bundle at build time
-          # Points to your VPS domain so API calls work in production
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
         run: npm run build
 
@@ -86,7 +87,7 @@ jobs:
           retention-days: 1
 
   # ────────────────────────────────────────────────────────────────
-  # JOB 3 — Deploy BOTH backend + frontend to the same VPS
+  # JOB 3 — Deploy to VPS
   # ────────────────────────────────────────────────────────────────
   deploy:
     name: Deploy to VPS
@@ -94,7 +95,8 @@ jobs:
     needs: [test, build]
 
     steps:
-
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Download frontend dist
         uses: actions/download-artifact@v4
@@ -102,9 +104,7 @@ jobs:
           name: frontend-dist
           path: client/dist/
 
-      # ── Step 1: Upload frontend build to VPS via SCP ────────────
-      # Copies client/dist/* → /var/www/mailforge/client/
-      # Nginx serves this directory as the static web root
+      # Upload frontend build
       - name: Upload frontend to VPS
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -115,7 +115,7 @@ jobs:
           source:   "client/dist/"
           target:   "${{ env.APP_DIR }}/client_upload"
 
-      # ── Step 2: SSH in — pull backend, install deps, restart ────
+      # SSH deploy
       - name: Deploy backend + activate frontend
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -131,35 +131,25 @@ jobs:
             echo "  MailForge Deploy — $(date '+%Y-%m-%d %H:%M:%S')"
             echo "════════════════════════════════════════"
 
-            # ── Backend: pull latest code ─────────────────────────
             echo "▶ [1/5] Pulling latest code..."
             cd ${{ env.APP_DIR }}
             git fetch origin main
             git reset --hard origin/main
 
-            # ── Backend: install production dependencies ──────────
             echo "▶ [2/5] Installing backend dependencies..."
-            cd ${{ env.APP_DIR }}/backend
             npm ci --omit=dev --prefer-offline
 
-            # ── Backend: zero-downtime reload via PM2 ─────────────
-            # pm2 reload does a rolling restart — no downtime
             echo "▶ [3/5] Reloading backend (PM2)..."
-            cd ${{ env.APP_DIR }}
             pm2 describe mailforge-api > /dev/null 2>&1 \
               && pm2 reload mailforge-api --update-env \
               || pm2 start ecosystem.config.js --env production
             pm2 save
 
-            # ── Frontend: swap in new build atomically ────────────
-            # Move uploaded dist into the nginx web root
-            # Using mv (atomic on same filesystem) avoids serving half-built files
             echo "▶ [4/5] Activating new frontend build..."
             rm -rf ${{ env.NGINX_WEBROOT }}
             mv ${{ env.APP_DIR }}/client_upload/client/dist ${{ env.NGINX_WEBROOT }}
             rm -rf ${{ env.APP_DIR }}/client_upload
 
-            # ── Nginx: reload config (picks up any conf changes) ──
             echo "▶ [5/5] Reloading Nginx..."
             sudo nginx -t && sudo systemctl reload nginx
 
