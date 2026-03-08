@@ -5,7 +5,7 @@ module.exports = {
   apps: [
     {
       name: "mailforge-api",
-      script: "./backend/src/index.js",
+      script: "./src/index.js",
       cwd: "/var/www/mailforge",
 
       // ── Clustering ─────────────────────────────────────────────
