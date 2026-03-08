@@ -133,7 +133,7 @@ jobs:
 
             echo "▶ [1/5] Pulling latest code..."
             cd ${{ env.APP_DIR }}
-            git fetch origin main
+            git fetch --depth=1 origin main
             git reset --hard origin/main
 
             echo "▶ [2/5] Checking dependency changes..."
