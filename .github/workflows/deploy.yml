@@ -38,12 +38,28 @@ jobs:
         env:
           NODE_ENV: test
           PORT: 3000
-          JWT_SECRET: ci_test_secret_not_for_production
           ADMIN_KEY: admin_test_key
+          APP_URL: http://localhost:5173
+          CLIENT_URL: http://localhost:5173
+          DB_PATH: data/test.sqlite
+          # Minimal valid-shaped service account JSON — Firebase Admin
+          # is stubbed out in test mode so this is never actually called
+          FIREBASE_SERVICE_ACCOUNT: >
+            {
+              "type": "service_account",
+              "project_id": "mailforge-ci",
+              "private_key_id": "ci-key-id",
+              "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA2a2rwplBQLzHPZe5TNJSA2bHi5gDtCMSGBDkbcZFMoEbDsq5\nuFBD7MkNUZYghCNThMSxQMBaExhZSVl+sTt8whXfH/K2Q7TT/SFSxFJBpSUqeznK\n7V2ZiGGMGGNWNiSjWnOK12TxNNHOqmOpGLBGMRHC6XKOS3pMVfXqfBuBRBu1lQpE\nM7wGHyBMuZGBGMCqzr5DPZjY1nHbUV5KRZYQ+ckHkNxYHQ8OKe1HxNZWNnUkRqzD\nghS0WR+ilLJnGDn/nYRrHaFpeK2iEVMZNsup8oYwPPGVlFRHFHRvFNqFAMXGRdRL\n5bvqbGbLiKGmqBhMNqPaHm0JEwbHiqPvgRSIIwIDAQABAoIBAHn8TYNFRUCOPJjl\n-----END RSA PRIVATE KEY-----\n",
+              "client_email": "firebase-adminsdk-ci@mailforge-ci.iam.gserviceaccount.com",
+              "client_id": "000000000000000000000",
+              "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+              "token_uri": "https://oauth2.googleapis.com/token"
+            }
         run: |
+          mkdir -p data
           node src/index.js &
           SERVER_PID=$!
-          sleep 2
+          sleep 3
           ADMIN_KEY=admin_test_key node tests/test.js
           kill $SERVER_PID
 
@@ -73,7 +89,13 @@ jobs:
       - name: Build
         working-directory: client
         env:
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_FIREBASE_API_KEY:             ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN:         ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID:          ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET:      ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID:              ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_API_URL:                      ${{ secrets.VITE_API_URL }}
         run: npm run build
 
       - name: Upload dist artifact
@@ -84,7 +106,7 @@ jobs:
           retention-days: 1
 
   # ────────────────────────────────────────────────────────────────
-  # JOB 3 — Deploy BOTH backend + frontend to the same VPS
+  # JOB 3 — Deploy to VPS
   # ────────────────────────────────────────────────────────────────
   deploy:
     name: Deploy to VPS
@@ -101,7 +123,6 @@ jobs:
           name: frontend-dist
           path: client/dist/
 
-      # ── SCP: upload frontend build to a staging dir on VPS ──────
       - name: Upload frontend to VPS
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -112,7 +133,6 @@ jobs:
           source:   "client/dist/"
           target:   "/var/www/mailforge/client_upload"
 
-      # ── SSH: pull backend, restart, activate frontend, fix Nginx ─
       - name: Deploy backend + activate frontend
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -123,23 +143,19 @@ jobs:
           script: |
             set -e
 
-            echo ""
             echo "================================================"
             echo "  MailForge Deploy — $(date '+%Y-%m-%d %H:%M:%S')"
             echo "================================================"
 
-            # ── [1/5] Pull latest backend code ───────────────────
             echo "▶ [1/5] Pulling latest code..."
             cd /var/www/mailforge
             git fetch origin main
             git reset --hard origin/main
 
-            # ── [2/5] Install backend production deps ─────────────
             echo "▶ [2/5] Installing backend dependencies..."
             cd /var/www/mailforge/backend
             npm ci --omit=dev --prefer-offline
 
-            # ── [3/5] Zero-downtime backend reload via PM2 ────────
             echo "▶ [3/5] Reloading backend (PM2)..."
             cd /var/www/mailforge
             pm2 describe mailforge-api > /dev/null 2>&1 \
@@ -147,16 +163,11 @@ jobs:
               || pm2 start ecosystem.config.js --env production
             pm2 save
 
-            # ── [4/5] Atomically swap in new frontend build ───────
             echo "▶ [4/5] Activating new frontend build..."
             rm -rf /var/www/mailforge/client
             mv /var/www/mailforge/client_upload/client/dist /var/www/mailforge/client
             rm -rf /var/www/mailforge/client_upload
 
-            # ── [5/5] Ensure Nginx is correctly configured ────────
-            # Copies latest nginx config from repo
-            # Enables our site, removes default Nginx page
-            # Safe to run on every deploy — all steps are idempotent
             echo "▶ [5/5] Configuring Nginx..."
             sudo cp /var/www/mailforge/nginx/mailforge.conf /etc/nginx/sites-available/mailforge
             sudo ln -sf /etc/nginx/sites-available/mailforge /etc/nginx/sites-enabled/mailforge
@@ -165,7 +176,5 @@ jobs:
 
             echo ""
             echo "✅ Deploy complete!"
-            echo "   Frontend files: $(ls /var/www/mailforge/client | wc -l) in webroot"
-            echo "   Backend status: $(pm2 show mailforge-api | grep -m1 status || echo 'running')"
+            echo "   Frontend: $(ls /var/www/mailforge/client | wc -l) files in webroot"
             echo "   URL: http://${{ secrets.VPS_HOST }}"
-            echo ""
