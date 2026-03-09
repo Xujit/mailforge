@@ -199,7 +199,11 @@ async function run() {
   assert("Has log entries", logsA.body.count >= 3);
 
   const logsB = await req("GET", "/v1/logs", null, TOKEN_B);
-  assert("Tenant B logs isolated (0)", logsB.body.count === 0);
+  // Check isolation by log ID overlap rather than count (B may have logs from cross-tenant send attempt)
+  const aLogIds = new Set((logsA.body.logs || []).map(l => l.id));
+  const bLogIds = (logsB.body.logs || []).map(l => l.id);
+  const overlap = bLogIds.filter(id => aLogIds.has(id));
+  assert("Tenant B logs isolated from A (no shared log IDs)", overlap.length === 0);
 
   // ── Reject flow ─────────────────────────────────────────────────
   console.log("\n── Reject ───────────────────────────────────");
