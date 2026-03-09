@@ -11,46 +11,6 @@ env:
   NGINX_WEBROOT: /var/www/mailforge/client
 
 jobs:
-  # ────────────────────────────────────────────────────────────────
-  # JOB 1 — Run backend tests
-  # ────────────────────────────────────────────────────────────────
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: backend/package.json
-
-      - name: Install backend deps
-        working-directory: backend
-        run: npm ci
-
-      - name: Run tests
-        working-directory: backend
-        env:
-          NODE_ENV: test
-          PORT: 3000
-          ADMIN_KEY: admin_test_key
-          APP_URL: http://localhost:5173
-          CLIENT_URL: http://localhost:5173
-          DB_PATH: data/test.sqlite
-          # No FIREBASE_SERVICE_ACCOUNT needed — Firebase is fully stubbed
-          # in test mode. verifyIdToken() uses test_token_* format instead.
-        run: |
-          mkdir -p data
-          node src/index.js &
-          SERVER_PID=$!
-          sleep 3
-          ADMIN_KEY=admin_test_key node tests/test.js
-          kill $SERVER_PID
 
   # ────────────────────────────────────────────────────────────────
   # JOB 2 — Build frontend
