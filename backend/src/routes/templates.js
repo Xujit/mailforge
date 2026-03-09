@@ -2,7 +2,6 @@
 
 const express = require("express");
 const router  = express.Router();
-const { requireAuth } = require("../middleware/auth");
 const { Template } = require("../models");
 
 function detectVars(str) {
@@ -24,7 +23,7 @@ function fmt(t) {
 }
 
 // GET /v1/templates
-router.get("/", requireAuth("templates"), async (req, res) => {
+router.get("/", async (req, res) => {
   const list = await Template.findAll({
     where: { tenantId: req.tenantId },
     order: [["createdAt", "DESC"]],
@@ -33,14 +32,14 @@ router.get("/", requireAuth("templates"), async (req, res) => {
 });
 
 // GET /v1/templates/:id
-router.get("/:id", requireAuth("templates"), async (req, res) => {
+router.get("/:id", async (req, res) => {
   const t = await Template.findOne({ where: { tenantId: req.tenantId, slug: req.params.id } });
   if (!t) return res.status(404).json({ error: `Template '${req.params.id}' not found.` });
   res.json(fmt(t));
 });
 
 // POST /v1/templates — create or update (upsert by slug)
-router.post("/", requireAuth("templates"), async (req, res) => {
+router.post("/", async (req, res) => {
   const { id, subject, html_body, text_body, variables } = req.body;
   if (!id)        return res.status(400).json({ error: "'id' is required." });
   if (!subject)   return res.status(400).json({ error: "'subject' is required." });
@@ -64,7 +63,7 @@ router.post("/", requireAuth("templates"), async (req, res) => {
 });
 
 // PUT /v1/templates/:id
-router.put("/:id", requireAuth("templates"), async (req, res) => {
+router.put("/:id", async (req, res) => {
   const { subject, html_body, text_body, variables } = req.body;
   if (!subject || !html_body)
     return res.status(400).json({ error: "'subject' and 'html_body' are required." });
@@ -78,7 +77,7 @@ router.put("/:id", requireAuth("templates"), async (req, res) => {
 });
 
 // DELETE /v1/templates/:id
-router.delete("/:id", requireAuth("templates"), async (req, res) => {
+router.delete("/:id", async (req, res) => {
   const t = await Template.findOne({ where: { tenantId: req.tenantId, slug: req.params.id } });
   if (!t) return res.status(404).json({ error: `Template '${req.params.id}' not found.` });
   await t.destroy();

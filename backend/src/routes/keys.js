@@ -3,7 +3,6 @@
 const express = require("express");
 const router  = express.Router();
 const { v4: uuidv4 } = require("uuid");
-const { requireAuth } = require("../middleware/auth");
 const { ApiKey } = require("../models");
 
 const VALID_SCOPES = ["send", "templates", "keys"];
@@ -14,7 +13,7 @@ function redact(k) {
 }
 
 // GET /v1/keys
-router.get("/", requireAuth("keys"), async (req, res) => {
+router.get("/", async (req, res) => {
   const keys = await ApiKey.findAll({
     where: { tenantId: req.tenantId },
     order: [["createdAt", "DESC"]],
@@ -23,7 +22,7 @@ router.get("/", requireAuth("keys"), async (req, res) => {
 });
 
 // POST /v1/keys
-router.post("/", requireAuth("keys"), async (req, res) => {
+router.post("/", async (req, res) => {
   const { label, scopes } = req.body;
   if (!label) return res.status(400).json({ error: "'label' is required." });
 
@@ -48,7 +47,7 @@ router.post("/", requireAuth("keys"), async (req, res) => {
 });
 
 // DELETE /v1/keys/:key
-router.delete("/:key", requireAuth("keys"), async (req, res) => {
+router.delete("/:key", async (req, res) => {
   const key = await ApiKey.findOne({
     where: { key: req.params.key, tenantId: req.tenantId },
   });

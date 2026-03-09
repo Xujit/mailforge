@@ -3,11 +3,10 @@
 const express = require("express");
 const router  = express.Router();
 const { Op }  = require("sequelize");
-const { requireAuth } = require("../middleware/auth");
 const { MessageLog } = require("../models");
 
 // GET /v1/logs?limit=50&template_id=welcome_email&status=failed
-router.get("/", requireAuth("send"), async (req, res) => {
+router.get("/", async (req, res) => {
   const { limit = 50, template_id, status } = req.query;
 
   const where = { tenantId: req.tenantId };
@@ -24,7 +23,7 @@ router.get("/", requireAuth("send"), async (req, res) => {
 });
 
 // GET /v1/logs/:id
-router.get("/:id", requireAuth("send"), async (req, res) => {
+router.get("/:id", async (req, res) => {
   const log = await MessageLog.findOne({
     where: { id: req.params.id, tenantId: req.tenantId },
   });

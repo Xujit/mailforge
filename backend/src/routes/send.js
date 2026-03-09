@@ -3,11 +3,10 @@
 const express    = require("express");
 const router     = express.Router();
 const { v4: uuidv4 } = require("uuid");
-const { requireAuth } = require("../middleware/auth");
 const { Template, MessageLog } = require("../models");
 const { renderTemplate, sendEmail } = require("../services/mailer");
 
-router.post("/", requireAuth("send"), async (req, res) => {
+router.post("/", async (req, res) => {
   const { tenantId } = req;
   const { template_id, to, variables = {}, reply_to } = req.body;
 
