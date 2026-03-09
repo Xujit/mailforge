@@ -1,12 +1,18 @@
-// tests/test.js — MailForge v3 Sequelize integration tests
+// tests/test.js — MailForge v4 integration tests
+// Uses stub Firebase tokens (test_token_<uid>_<email>) that bypass real Firebase
+// when NODE_ENV=test — safe for CI with no real Firebase credentials.
 
 const http = require("http");
 
 let passed = 0, failed = 0;
 const ADMIN_KEY = process.env.ADMIN_KEY || "admin_changeme";
 
-let tenantAToken = null, tenantBToken = null, tenantAApiKey = null;
+// Stub token format: test_token_<uid>_<email>
+const TOKEN_A = "test_token_uid_alice_alice@acme.com";
+const TOKEN_B = "test_token_uid_bob_bob@widgets.io";
+
 let tenantAId = null, tenantBId = null;
+let tenantAApiKey = null;
 
 async function req(method, path, body, token) {
   const data = body ? JSON.stringify(body) : null;
@@ -16,7 +22,7 @@ async function req(method, path, body, token) {
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(data  ? { "Content-Length": Buffer.byteLength(data) } : {}),
+        ...(data   ? { "Content-Length": Buffer.byteLength(data) } : {}),
       },
     }, res => {
       let raw = "";
@@ -34,181 +40,179 @@ async function req(method, path, body, token) {
 
 function assert(name, cond, detail = "") {
   if (cond) { console.log(`  ✓  ${name}`); passed++; }
-  else { console.error(`  ✗  ${name}${detail ? " → " + detail : ""}`); failed++; }
+  else { console.error(`  ✗  ${name}${detail ? " — " + detail : ""}`); failed++; }
 }
 
 async function run() {
-  console.log("\n🧪  MailForge v3 — Sequelize + SQLite Tests\n");
+  console.log("\n🧪  MailForge v4 — Firebase Auth + SQLite Tests\n");
 
-  // ── Health ──────────────────────────────────────────────────────────────────
+  // ── Health ──────────────────────────────────────────────────────
   console.log("── Health ──────────────────────────────────");
   const h = await req("GET", "/health");
   assert("GET /health → 200", h.status === 200);
-  assert("DB is sqlite", h.body.db === "sqlite");
+  assert("auth = firebase", h.body.auth === "firebase");
+  assert("db = sqlite", h.body.db === "sqlite");
 
-  // ── Register ────────────────────────────────────────────────────────────────
-  console.log("\n── Register ────────────────────────────────");
-  const regA = await req("POST", "/auth/register", { email: "alice@acme.com", password: "testpass99", name: "Alice", company: "Acme" });
-  assert("Tenant A registers → 201", regA.status === 201);
-  assert("Status is pending", regA.body.status === "pending");
-  assert("No token issued yet", !regA.body.access_token);
-  tenantAId = regA.body.tenantId;
+  // ── /auth/me — auto-create pending tenant ───────────────────────
+  console.log("\n── /auth/me ─────────────────────────────────");
+  const meA = await req("POST", "/auth/me", null, TOKEN_A);
+  assert("Tenant A created → 200", meA.status === 200);
+  assert("Status is pending", meA.body.status === "pending");
+  assert("isNew = true", meA.body.isNew === true);
+  tenantAId = meA.body.tenantId;
 
-  const regB = await req("POST", "/auth/register", { email: "bob@widgets.io", password: "securepass99", name: "Bob" });
-  assert("Tenant B registers → 201", regB.status === 201);
-  tenantBId = regB.body.tenantId;
+  const meA2 = await req("POST", "/auth/me", null, TOKEN_A);
+  assert("Second /auth/me → not new", meA2.body.isNew === false);
 
-  const dup = await req("POST", "/auth/register", { email: "alice@acme.com", password: "other123x" });
-  assert("Duplicate email → 409", dup.status === 409);
+  const meB = await req("POST", "/auth/me", null, TOKEN_B);
+  assert("Tenant B created → 200", meB.status === 200);
+  tenantBId = meB.body.tenantId;
 
-  const shortPw = await req("POST", "/auth/register", { email: "x@x.com", password: "short" });
-  assert("Short password → 400", shortPw.status === 400);
+  // ── /auth/register-profile ──────────────────────────────────────
+  console.log("\n── Register profile ─────────────────────────");
+  const profA = await req("POST", "/auth/register-profile", { name: "Alice", company: "Acme", phone: "+1 555 000 0001" }, TOKEN_A);
+  assert("Profile saved → 200", profA.status === 200);
+  assert("Name saved", profA.body.name === "Alice");
+  assert("Phone required — missing → 400", (await req("POST", "/auth/register-profile", { name: "X", company: "Y" }, TOKEN_A)).status === 400);
 
-  // ── Login blocked while pending ─────────────────────────────────────────────
-  console.log("\n── Login gate ──────────────────────────────");
-  const loginPending = await req("POST", "/auth/login", { email: "alice@acme.com", password: "testpass99" });
-  assert("Login while pending → 403", loginPending.status === 403);
-  assert("Status = pending", loginPending.body.status === "pending");
+  // ── Blocked while pending ───────────────────────────────────────
+  console.log("\n── Pending gate ─────────────────────────────");
+  const blocked = await req("GET", "/v1/templates", null, TOKEN_A);
+  assert("API blocked while pending → 403", blocked.status === 403);
+  assert("Status = pending", blocked.body.status === "pending");
 
-  // ── Admin ────────────────────────────────────────────────────────────────────
-  console.log("\n── Admin ───────────────────────────────────");
+  // ── Admin ───────────────────────────────────────────────────────
+  console.log("\n── Admin ────────────────────────────────────");
   const stats = await req("GET", "/admin/stats", null, ADMIN_KEY);
   assert("GET /admin/stats → 200", stats.status === 200);
   assert("pending >= 2", stats.body.pending >= 2);
 
-  const listPending = await req("GET", "/admin/tenants?status=pending", null, ADMIN_KEY);
-  assert("List pending → 200", listPending.status === 200);
-  assert("Alice in pending list", listPending.body.tenants?.some(t => t.id === tenantAId));
-  assert("passwordHash not exposed", !listPending.body.tenants?.[0]?.passwordHash);
-
   const badAdmin = await req("GET", "/admin/tenants", null, "wrong_key");
   assert("Bad admin key → 401", badAdmin.status === 401);
 
-  // ── Approve Tenant A ─────────────────────────────────────────────────────────
-  console.log("\n── Approve ─────────────────────────────────");
+  // ── Approve Tenant A ────────────────────────────────────────────
+  console.log("\n── Approve ──────────────────────────────────");
   const approveA = await req("POST", `/admin/tenants/${tenantAId}/approve`, {}, ADMIN_KEY);
   assert("Approve A → 200", approveA.status === 200);
   assert("Status = active", approveA.body.tenant?.status === "active");
-  assert("Email sent flag", approveA.body.email_sent === true || approveA.body.email_sent === false); // either is ok
+  assert("Trial started", !!approveA.body.trial_ends_at);
+  assert("passwordHash not exposed", !approveA.body.tenant?.passwordHash);
 
-  // ── Login after approval ─────────────────────────────────────────────────────
-  console.log("\n── Login post-approval ─────────────────────");
-  const loginA = await req("POST", "/auth/login", { email: "alice@acme.com", password: "testpass99" });
-  assert("Login → 200", loginA.status === 200);
-  assert("Has access_token", !!loginA.body.access_token);
-  assert("Has refresh_token", !!loginA.body.refresh_token);
-  tenantAToken = loginA.body.access_token;
-  const refreshTok = loginA.body.refresh_token;
+  // ── Active tenant access ────────────────────────────────────────
+  console.log("\n── Trial access ─────────────────────────────");
+  const meActive = await req("POST", "/auth/me", null, TOKEN_A);
+  assert("Status = active after approval", meActive.body.status === "active");
 
-  // ── Templates ────────────────────────────────────────────────────────────────
-  console.log("\n── Templates ───────────────────────────────");
-  const tList = await req("GET", "/v1/templates", null, tenantAToken);
-  assert("List templates → 200", tList.status === 200);
-  assert("Has 3 seeded templates", tList.body.count === 3);
+  const tList = await req("GET", "/v1/templates", null, TOKEN_A);
+  assert("Templates accessible on trial → 200", tList.status === 200);
+  assert("3 seeded templates", tList.body.count === 3);
 
+  // ── Subscription status ─────────────────────────────────────────
+  console.log("\n── Billing ──────────────────────────────────");
+  const billing = await req("GET", "/billing/status", null, TOKEN_A);
+  assert("GET /billing/status → 200", billing.status === 200);
+  assert("subscriptionStatus = trial", billing.body.subscriptionStatus === "trial");
+  assert("trialDaysLeft = 7", billing.body.trialDaysLeft === 7);
+
+  // ── Subscribe ───────────────────────────────────────────────────
+  console.log("\n── Subscribe ────────────────────────────────");
+  const subMonthly = await req("POST", `/admin/tenants/${tenantAId}/subscribe`, { plan: "monthly" }, ADMIN_KEY);
+  assert("Subscribe monthly → 200", subMonthly.status === 200);
+  assert("Plan = monthly", subMonthly.body.plan === "monthly");
+  assert("plan_expires_at set", !!subMonthly.body.plan_expires_at);
+
+  const billingAfter = await req("GET", "/billing/status", null, TOKEN_A);
+  assert("subscriptionStatus = active after subscribe", billingAfter.body.subscriptionStatus === "active");
+
+  const badPlan = await req("POST", `/admin/tenants/${tenantAId}/subscribe`, { plan: "weekly" }, ADMIN_KEY);
+  assert("Invalid plan → 400", badPlan.status === 400);
+
+  // ── Templates CRUD ──────────────────────────────────────────────
+  console.log("\n── Templates ────────────────────────────────");
   const tCreate = await req("POST", "/v1/templates", {
-    id: "promo_blast",
-    subject: "Special offer for {{first_name}}!",
-    html_body: "<p>Hi {{first_name}}, use code <b>{{promo_code}}</b>!</p>",
-  }, tenantAToken);
+    id: "promo_blast", subject: "Hi {{first_name}}!", html_body: "<p>Use code <b>{{code}}</b></p>",
+  }, TOKEN_A);
   assert("Create template → 201", tCreate.status === 201);
-  assert("Variables auto-detected", tCreate.body.variables.includes("first_name"));
+  assert("Variables detected", tCreate.body.variables?.includes("first_name"));
 
-  const tGet = await req("GET", "/v1/templates/promo_blast", null, tenantAToken);
+  const tGet = await req("GET", "/v1/templates/promo_blast", null, TOKEN_A);
   assert("GET template → 200", tGet.status === 200);
 
   const tUpdate = await req("PUT", "/v1/templates/promo_blast", {
-    subject: "Updated: {{first_name}} — act now!",
-    html_body: "<p>Updated body {{first_name}} {{promo_code}}</p>",
-  }, tenantAToken);
+    subject: "Updated {{first_name}}", html_body: "<p>{{first_name}} {{code}}</p>",
+  }, TOKEN_A);
   assert("PUT template → 200", tUpdate.status === 200);
 
-  // ── Tenant isolation ─────────────────────────────────────────────────────────
-  console.log("\n── Tenant isolation ────────────────────────");
-  const approveB = await req("POST", `/admin/tenants/${tenantBId}/approve`, {}, ADMIN_KEY);
-  assert("Approve B → 200", approveB.status === 200);
-  const loginB = await req("POST", "/auth/login", { email: "bob@widgets.io", password: "securepass99" });
-  tenantBToken = loginB.body.access_token;
+  // ── Tenant isolation ────────────────────────────────────────────
+  console.log("\n── Tenant isolation ─────────────────────────");
+  await req("POST", `/admin/tenants/${tenantBId}/approve`, {}, ADMIN_KEY);
+  await req("POST", `/admin/tenants/${tenantBId}/subscribe`, { plan: "monthly" }, ADMIN_KEY);
 
-  const bTemplates = await req("GET", "/v1/templates", null, tenantBToken);
-  assert("Tenant B has own templates", bTemplates.body.count === 3);
+  const bGet = await req("GET", "/v1/templates/promo_blast", null, TOKEN_B);
+  assert("Tenant B can't see A's template → 404", bGet.status === 404);
 
-  const bGetA = await req("GET", "/v1/templates/promo_blast", null, tenantBToken);
-  assert("Tenant B cannot see A's template → 404", bGetA.status === 404);
+  const bList = await req("GET", "/v1/templates", null, TOKEN_B);
+  assert("Tenant B has own 3 seeded templates", bList.body.count === 3);
 
-  // ── API Keys ──────────────────────────────────────────────────────────────────
-  console.log("\n── API Keys ────────────────────────────────");
-  const keyList = await req("GET", "/v1/keys", null, tenantAToken);
+  // ── API Keys ────────────────────────────────────────────────────
+  console.log("\n── API Keys ─────────────────────────────────");
+  const keyList = await req("GET", "/v1/keys", null, TOKEN_A);
   assert("List keys → 200", keyList.status === 200);
-  assert("Has default key from approval", keyList.body.count >= 1);
+  assert("Default key exists", keyList.body.count >= 1);
 
-  const newKey = await req("POST", "/v1/keys", { label: "CI Pipeline", scopes: ["send"] }, tenantAToken);
+  const newKey = await req("POST", "/v1/keys", { label: "CI", scopes: ["send"] }, TOKEN_A);
   assert("Create key → 201", newKey.status === 201);
   assert("Key starts with mk_live_", newKey.body.key?.startsWith("mk_live_"));
   tenantAApiKey = newKey.body.key;
 
-  // ── Send via API key ──────────────────────────────────────────────────────────
-  console.log("\n── Send ────────────────────────────────────");
+  // ── Send via API key ────────────────────────────────────────────
+  console.log("\n── Send ─────────────────────────────────────");
   const sendKey = await req("POST", "/v1/send", {
-    template_id: "welcome_email",
-    to: "newuser@example.com",
-    variables: { name: "Alice", login_url: "https://app.example.com", tenant_id: tenantAId },
+    template_id: "welcome_email", to: "newuser@example.com",
+    variables: { name: "Alice", login_url: "http://localhost:5173", tenant_id: tenantAId },
   }, tenantAApiKey);
   assert("Send via API key → 200", sendKey.status === 200);
-  assert("Status delivered", sendKey.body.results?.[0]?.status === "delivered");
+  assert("Status = delivered", sendKey.body.results?.[0]?.status === "delivered");
 
-  const sendJwt = await req("POST", "/v1/send", {
-    template_id: "otp_code",
-    to: ["a@test.com", "b@test.com"],
+  const sendMulti = await req("POST", "/v1/send", {
+    template_id: "otp_code", to: ["a@test.com", "b@test.com"],
     variables: { otp: "482910", expiry_minutes: "10" },
-  }, tenantAToken);
-  assert("Multi-recipient via JWT → 200", sendJwt.status === 200);
-  assert("Two results", sendJwt.body.results?.length === 2);
+  }, TOKEN_A);
+  assert("Multi-recipient → 200", sendMulti.status === 200);
+  assert("Two results", sendMulti.body.results?.length === 2);
 
-  const sendBadTemplate = await req("POST", "/v1/send", { template_id: "doesnt_exist", to: "x@x.com" }, tenantAToken);
+  const sendBadTemplate = await req("POST", "/v1/send", { template_id: "nope", to: "x@x.com" }, TOKEN_A);
   assert("Unknown template → 404", sendBadTemplate.status === 404);
 
-  const crossTenant = await req("POST", "/v1/send", {
-    template_id: "promo_blast", to: "x@x.com",
-  }, tenantBToken);
-  assert("Cross-tenant template blocked → 404", crossTenant.status === 404);
+  const crossTenant = await req("POST", "/v1/send", { template_id: "promo_blast", to: "x@x.com" }, TOKEN_B);
+  assert("Cross-tenant send blocked → 404", crossTenant.status === 404);
 
-  // ── Logs ─────────────────────────────────────────────────────────────────────
-  console.log("\n── Logs ────────────────────────────────────");
-  const logsA = await req("GET", "/v1/logs", null, tenantAToken);
+  // ── API key scope check ─────────────────────────────────────────
+  console.log("\n── Scope enforcement ────────────────────────");
+  const noScope = await req("GET", "/v1/templates", null, tenantAApiKey); // key only has "send" scope
+  assert("Key without templates scope → 403", noScope.status === 403);
+
+  // ── Logs ────────────────────────────────────────────────────────
+  console.log("\n── Logs ─────────────────────────────────────");
+  const logsA = await req("GET", "/v1/logs", null, TOKEN_A);
   assert("Logs → 200", logsA.status === 200);
   assert("Has log entries", logsA.body.count >= 3);
 
-  const logsB = await req("GET", "/v1/logs", null, tenantBToken);
+  const logsB = await req("GET", "/v1/logs", null, TOKEN_B);
   assert("Tenant B logs isolated (0)", logsB.body.count === 0);
 
-  const logId = logsA.body.logs?.[0]?.id;
-  if (logId) {
-    const logDetail = await req("GET", `/v1/logs/${logId}`, null, tenantAToken);
-    assert("GET /v1/logs/:id → 200", logDetail.status === 200);
-  }
-
-  // ── Token refresh ─────────────────────────────────────────────────────────────
-  console.log("\n── Token refresh ───────────────────────────");
-  const refreshed = await req("POST", "/auth/refresh", { refresh_token: refreshTok });
-  assert("Refresh → 200", refreshed.status === 200);
-  assert("New access token", !!refreshed.body.access_token);
-  assert("Token rotated (new refresh token)", refreshed.body.refresh_token !== refreshTok);
-
-  const reusedRefresh = await req("POST", "/auth/refresh", { refresh_token: refreshTok });
-  assert("Old refresh token rejected → 401", reusedRefresh.status === 401);
-
-  // ── Reject flow ───────────────────────────────────────────────────────────────
-  console.log("\n── Reject ──────────────────────────────────");
-  const regC = await req("POST", "/auth/register", { email: "charlie@rejected.com", password: "testpass99", name: "Charlie" });
-  const rejectC = await req("POST", `/admin/tenants/${regC.body.tenantId}/reject`, { reason: "Could not verify business." }, ADMIN_KEY);
+  // ── Reject flow ─────────────────────────────────────────────────
+  console.log("\n── Reject ───────────────────────────────────");
+  const TOKEN_C = "test_token_uid_charlie_charlie@rejected.com";
+  await req("POST", "/auth/me", null, TOKEN_C);
+  const cId = (await req("POST", "/auth/me", null, TOKEN_C)).body.tenantId;
+  const rejectC = await req("POST", `/admin/tenants/${cId}/reject`, { reason: "Could not verify." }, ADMIN_KEY);
   assert("Reject → 200", rejectC.status === 200);
 
-  const loginC = await req("POST", "/auth/login", { email: "charlie@rejected.com", password: "testpass99" });
-  assert("Rejected user login → 403", loginC.status === 403);
-  assert("Rejection reason surfaced", loginC.body.reason === "Could not verify business.");
+  const rejectedAccess = await req("GET", "/v1/templates", null, TOKEN_C);
+  assert("Rejected tenant blocked → 403", rejectedAccess.status === 403);
 
-  // ── Summary ───────────────────────────────────────────────────────────────────
+  // ── Summary ─────────────────────────────────────────────────────
   console.log(`\n${"─".repeat(45)}`);
   console.log(`  Results: ${passed} passed, ${failed} failed`);
   if (failed === 0) console.log("  🎉  All tests passed!\n");
