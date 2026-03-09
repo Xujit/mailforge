@@ -1,59 +1,33 @@
 # ── OS ────────────────────────────────────────────────────────────
 .DS_Store
-.DS_Store?
 ._*
-.Spotlight-V100
-.Trashes
 Thumbs.db
-ehthumbs.db
-desktop.ini
 
-# ── Editor / IDE ──────────────────────────────────────────────────
+# ── Editor ────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
-*.sublime-project
-*.sublime-workspace
-.history/
 
-# ── Backend (Node.js) ─────────────────────────────────────────────
+# ── Backend ───────────────────────────────────────────────────────
 backend/node_modules/
 backend/.env
-backend/.env.local
-backend/.env.*.local
+backend/data/
+backend/*.sqlite
+backend/*.sqlite-journal
 backend/logs/
 backend/*.log
-backend/npm-debug.log*
-backend/yarn-debug.log*
-backend/yarn-error.log*
-backend/.npm/
 
-# ── Frontend (Vite / React) ───────────────────────────────────────
+# ── Frontend ──────────────────────────────────────────────────────
 client/node_modules/
 client/dist/
 client/.env
 client/.env.local
-client/.env.*.local
-client/.cache/
-client/.vite/
 
 # ── PM2 ───────────────────────────────────────────────────────────
 .pm2/
-pm2.log
-
-# ── Logs ──────────────────────────────────────────────────────────
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-pnpm-debug.log*
 
 # ── Misc ──────────────────────────────────────────────────────────
 *.zip
-*.tgz
+*.log
 .env
-.env.local
-.cache/
-tmp/
-temp/
