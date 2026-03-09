@@ -8,12 +8,15 @@ const fs   = require("fs");
 const dataDir = path.join(__dirname, "../data");
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-require("./firebase").getFirebaseApp();
+// Initialise Firebase Admin on boot (skipped in test mode — stub used instead)
+if (process.env.NODE_ENV !== "test") {
+  require("./firebase").getFirebaseApp();
+}
 
 const express = require("express");
 const { sequelize } = require("./models");
-const { requireAuth }         = require("./middleware/auth");
-const { requireSubscription } = require("./middleware/subscription");
+const { requireAuth }          = require("./middleware/auth");
+const { requireSubscription }  = require("./middleware/subscription");
 const { startSubscriptionJob } = require("./services/subscriptionJob");
 
 const app  = express();
@@ -32,25 +35,26 @@ app.use((req, res, next) => {
 });
 
 app.use((req, _res, next) => {
-  console.log(`${new Date().toISOString()}  ${req.method}  ${req.path}`);
+  if (process.env.NODE_ENV !== "test") {
+    console.log(`${new Date().toISOString()}  ${req.method}  ${req.path}`);
+  }
   next();
 });
 
-// ── Public routes (no auth required) ─────────────────────────────────────────
-app.use("/auth",    require("./routes/auth"));
-app.use("/admin",   require("./routes/admin"));
+// ── Public routes ─────────────────────────────────────────────────────────────
+app.use("/auth",  require("./routes/auth"));
+app.use("/admin", require("./routes/admin"));
 
 // ── Authenticated + subscription-gated /v1/* routes ──────────────────────────
-// requireSubscription runs after requireAuth inside each route via the stack below
 const v1 = express.Router();
-v1.use(requireSubscription); // applies to all /v1/* after auth is established
+v1.use(requireSubscription);
 
 app.use("/v1/send",      requireAuth("send"),      v1, require("./routes/send"));
 app.use("/v1/templates", requireAuth("templates"), v1, require("./routes/templates"));
 app.use("/v1/keys",      requireAuth("keys"),      v1, require("./routes/keys"));
 app.use("/v1/logs",      requireAuth("send"),      v1, require("./routes/logs"));
 
-// ── Billing status (auth required, no subscription gate — always accessible) ──
+// ── Billing (auth required, no subscription gate) ─────────────────────────────
 app.use("/billing", require("./routes/billing"));
 
 app.get("/health", (_req, res) => res.json({
@@ -74,19 +78,22 @@ app.use((err, _req, res, _next) => {
 (async () => {
   try {
     await sequelize.sync({ alter: true });
-    console.log("✅  Database synced →", process.env.DB_PATH || "data/mailforge.sqlite");
 
-    startSubscriptionJob();
+    if (process.env.NODE_ENV !== "test") {
+      startSubscriptionJob();
+    }
 
     app.listen(PORT, () => {
-      console.log("");
-      console.log("╔══════════════════════════════════════════════════════╗");
-      console.log("║   MailForge  v4.1  — Firebase Auth + Subscriptions   ║");
-      console.log(`║   http://localhost:${PORT}                            ║`);
-      console.log("╠══════════════════════════════════════════════════════╣");
-      console.log(`║   Admin key: ${(process.env.ADMIN_KEY || "admin_changeme").padEnd(39)}║`);
-      console.log("╚══════════════════════════════════════════════════════╝");
-      console.log("");
+      if (process.env.NODE_ENV !== "test") {
+        console.log("");
+        console.log("╔══════════════════════════════════════════════════════╗");
+        console.log("║   MailForge  v4.1  — Firebase Auth + Subscriptions   ║");
+        console.log(`║   http://localhost:${PORT}                            ║`);
+        console.log("╠══════════════════════════════════════════════════════╣");
+        console.log(`║   Admin key: ${(process.env.ADMIN_KEY || "admin_changeme").padEnd(39)}║`);
+        console.log("╚══════════════════════════════════════════════════════╝");
+        console.log("");
+      }
     });
   } catch (err) {
     console.error("❌  Failed to start:", err.message);

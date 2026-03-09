@@ -1,10 +1,4 @@
 // src/firebase.js — Firebase Admin SDK initialisation
-//
-// Supports two credential strategies:
-//   1. FIREBASE_SERVICE_ACCOUNT env var — JSON string of the service account key
-//      (recommended for production / CI)
-//   2. GOOGLE_APPLICATION_CREDENTIALS env var — path to the service account JSON file
-//      (convenient for local dev)
 
 const admin = require("firebase-admin");
 
@@ -13,18 +7,20 @@ let app;
 function getFirebaseApp() {
   if (app) return app;
 
+  // In test mode skip real Firebase initialisation entirely —
+  // verifyIdToken is stubbed out so the SDK is never actually called
+  if (process.env.NODE_ENV === "test") return null;
+
   let credential;
 
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    // Option 1: JSON string in env var (preferred for VPS / GitHub Actions secrets)
     try {
       const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
       credential = admin.credential.cert(serviceAccount);
     } catch (err) {
-      throw new Error("FIREBASE_SERVICE_ACCOUNT is set but is not valid JSON: " + err.message);
+      throw new Error("FIREBASE_SERVICE_ACCOUNT is not valid JSON: " + err.message);
     }
   } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    // Option 2: Path to service account JSON file
     credential = admin.credential.applicationDefault();
   } else {
     throw new Error(
@@ -39,10 +35,24 @@ function getFirebaseApp() {
 }
 
 /**
- * Verify a Firebase ID token and return the decoded claims.
- * Throws if the token is invalid or expired.
+ * Verify a Firebase ID token.
+ *
+ * In NODE_ENV=test, tokens prefixed with "test_token_" are accepted without
+ * hitting Firebase at all. Format: "test_token_<uid>_<email>"
+ * Example: "test_token_uid_alice_alice@acme.com"
  */
 async function verifyIdToken(idToken) {
+  if (process.env.NODE_ENV === "test") {
+    if (idToken.startsWith("test_token_")) {
+      const withoutPrefix    = idToken.replace("test_token_", "");
+      const firstUnderscore  = withoutPrefix.indexOf("_");
+      const uid   = withoutPrefix.slice(0, firstUnderscore);
+      const email = withoutPrefix.slice(firstUnderscore + 1);
+      return { uid, email, name: email.split("@")[0], picture: null };
+    }
+    throw new Error("Invalid test token. Use format: test_token_<uid>_<email>");
+  }
+
   getFirebaseApp();
   return admin.auth().verifyIdToken(idToken);
 }

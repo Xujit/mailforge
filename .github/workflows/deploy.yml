@@ -42,19 +42,8 @@ jobs:
           APP_URL: http://localhost:5173
           CLIENT_URL: http://localhost:5173
           DB_PATH: data/test.sqlite
-          # Minimal valid-shaped service account JSON — Firebase Admin
-          # is stubbed out in test mode so this is never actually called
-          FIREBASE_SERVICE_ACCOUNT: >
-            {
-              "type": "service_account",
-              "project_id": "mailforge-ci",
-              "private_key_id": "ci-key-id",
-              "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA2a2rwplBQLzHPZe5TNJSA2bHi5gDtCMSGBDkbcZFMoEbDsq5\nuFBD7MkNUZYghCNThMSxQMBaExhZSVl+sTt8whXfH/K2Q7TT/SFSxFJBpSUqeznK\n7V2ZiGGMGGNWNiSjWnOK12TxNNHOqmOpGLBGMRHC6XKOS3pMVfXqfBuBRBu1lQpE\nM7wGHyBMuZGBGMCqzr5DPZjY1nHbUV5KRZYQ+ckHkNxYHQ8OKe1HxNZWNnUkRqzD\nghS0WR+ilLJnGDn/nYRrHaFpeK2iEVMZNsup8oYwPPGVlFRHFHRvFNqFAMXGRdRL\n5bvqbGbLiKGmqBhMNqPaHm0JEwbHiqPvgRSIIwIDAQABAoIBAHn8TYNFRUCOPJjl\n-----END RSA PRIVATE KEY-----\n",
-              "client_email": "firebase-adminsdk-ci@mailforge-ci.iam.gserviceaccount.com",
-              "client_id": "000000000000000000000",
-              "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-              "token_uri": "https://oauth2.googleapis.com/token"
-            }
+          # No FIREBASE_SERVICE_ACCOUNT needed — Firebase is fully stubbed
+          # in test mode. verifyIdToken() uses test_token_* format instead.
         run: |
           mkdir -p data
           node src/index.js &
