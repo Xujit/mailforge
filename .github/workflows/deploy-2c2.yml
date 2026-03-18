@@ -1,4 +1,4 @@
-name: Deploy MailForge
+name: Deploy ec2
 
 on:
   workflow_dispatch:
