@@ -1,0 +1,162 @@
+name: Deploy MailForge
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package.json
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          PORT: 3000
+          ADMIN_KEY: admin_test_key
+          APP_URL: http://localhost:5173
+          CLIENT_URL: http://localhost:5173
+          DB_PATH: data/test.sqlite
+        run: |
+          mkdir -p data
+          node src/index.js &
+          SERVER_PID=$!
+          sleep 3
+          ADMIN_KEY=admin_test_key node tests/test.js
+          kill $SERVER_PID
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend deps
+        working-directory: client
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: client
+        env:
+          VITE_FIREBASE_API_KEY:             ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN:         ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID:          ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET:      ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID:              ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_API_URL:                      ${{ secrets.VITE_API_URL }}
+        run: npm run build
+
+      - name: Install backend prod deps
+        working-directory: backend
+        run: npm ci --omit=dev
+
+      - name: Assemble deploy artifact
+        run: |
+          mkdir -p deploy/client
+          mkdir -p deploy/nginx
+
+          cp -r backend deploy/backend
+          cp -r client/dist deploy/client/dist
+
+          cp ecosystem.config.js deploy/
+          cp nginx/mailforge.conf deploy/nginx/
+
+      - name: Upload deploy artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-artifact
+          path: deploy/
+          retention-days: 1
+
+  deploy:
+    name: Deploy to AWS EC2
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download deploy artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-artifact
+          path: deploy/
+
+      - name: SCP artifact to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:     ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          port:     22
+          source:   "deploy/"
+          target:   "/var/www/mailforge_incoming"
+
+      - name: Activate on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          port:     22
+          script: |
+            set -e
+
+            echo "================================================"
+            echo "  MailForge Deploy (EC2) — $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "================================================"
+
+            INCOMING=/var/www/mailforge_incoming/deploy
+            APP=/var/www/mailforge
+
+            echo "▶ [1/4] Swapping backend..."
+            rm -rf $APP/backend
+            mv $INCOMING/backend $APP/backend
+
+            echo "▶ [2/4] Swapping frontend..."
+            rm -rf $APP/client
+            mv $INCOMING/client/dist $APP/client
+
+            echo "▶ [3/4] Updating config..."
+            mv $INCOMING/ecosystem.config.js $APP/ecosystem.config.js
+
+            sudo cp $INCOMING/nginx/mailforge.conf /etc/nginx/sites-available/mailforge
+            sudo ln -sf /etc/nginx/sites-available/mailforge /etc/nginx/sites-enabled/mailforge
+            sudo rm -f /etc/nginx/sites-enabled/default
+            sudo nginx -t && sudo systemctl reload nginx
+
+            echo "▶ [4/4] Restarting backend..."
+            cd $APP
+            pm2 describe mailforge-api > /dev/null 2>&1 \
+              && pm2 restart mailforge-api --update-env \
+              || pm2 start ecosystem.config.js --env production
+
+            pm2 save
+
+            rm -rf /var/www/mailforge_incoming
+
+            echo ""
+            echo "✅ Deploy complete!"
+            echo "   URL: http://${{ secrets.EC2_HOST }}"
