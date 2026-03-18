@@ -12,6 +12,7 @@ module.exports = {
       env_production: {
         NODE_ENV: "production",
         PORT:     3000,
+        ADMIN_KEY: "admin",
       },
       watch:              false,
       max_memory_restart: "400M",
